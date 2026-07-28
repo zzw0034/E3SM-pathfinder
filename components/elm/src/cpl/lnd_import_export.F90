@@ -91,10 +91,12 @@ contains
     integer ::  aindex(2), tindex(14,2), starti(3), counti(3)
     integer ::  grid_map(500000), zone_map(500000)
     integer ::  met_nvars, nyears_spinup, nyears_trans, starti_site, endi_site
-    real(r8) :: smap05_lat(360), smap05_lon(720)
+    integer ::  hdm_nlon, hdm_nlat, hdm_ntime, hdm_rec
+    integer, allocatable :: hdm_years(:)
+    real(r8), allocatable :: hdm_lat(:), hdm_lon(:)
     real(r8) :: smapt62_lat(94), smapt62_lon(192)
     real(r8) :: smap2_lat(96), smap2_lon(144)
-    real(r8) :: thisdist, mindist, thislon
+    real(r8) :: thisdist, mindist, thislon, hdm_value1, hdm_value2
     real(r8) :: tbot, tempndep(1,1,158), thiscalday, wt1(14), wt2(14), thisdoy
     real(r8) :: site_metdata(14,12)
     real(r8) :: var_month_mean(12)
@@ -323,9 +325,15 @@ contains
             atm2lnd_vars%endyear_met_spinup = 590 !100
             atm2lnd_vars%endyear_met_trans  = 590 !100
           else if (atm2lnd_vars%metsource == 6) then
-            atm2lnd_vars%startyear_met      = 1950
-            atm2lnd_vars%endyear_met_spinup = 1970
-            atm2lnd_vars%endyear_met_trans  = 2025
+            if (use_daymet) then
+              atm2lnd_vars%startyear_met      = 1980
+              atm2lnd_vars%endyear_met_spinup = 1999
+              atm2lnd_vars%endyear_met_trans  = 2023
+            else
+              atm2lnd_vars%startyear_met      = 1950
+              atm2lnd_vars%endyear_met_spinup = 1970
+              atm2lnd_vars%endyear_met_trans  = 2025
+            end if
           end if
 
           if (use_livneh) then 
@@ -425,7 +433,11 @@ contains
                     !metdata_fname = 'WCYCL1850S.ne30_' // trim(metvars(v)) // '_0076-0100_z' // zst(2:3) // '.nc'
                     metdata_fname = 'CBGC1850S.ne30_' // trim(metvars(v)) // '_0566-0590_z' // zst(2:3) // '.nc'
             else if (atm2lnd_vars%metsource == 6) then
-                metdata_fname = 'ERA5_' // trim(metvars(v)) // '_1950-2025_z' // zst(2:3) // '.nc'
+                if (use_daymet) then
+                    metdata_fname = 'Daymet_ERA5_TESSFA.4km_' // trim(metvars(v)) // '_1980-2023_z' // zst(2:3) // '.nc'
+                else
+                    metdata_fname = 'ERA5_' // trim(metvars(v)) // '_1950-2025_z' // zst(2:3) // '.nc'
+                end if
             end if
   
             ierr = nf90_open(trim(metdata_bypass) // '/' // trim(metdata_fname), NF90_NOWRITE, met_ncids(v))
@@ -736,82 +748,191 @@ contains
                                              !atm2lnd_vars%atm_input(8,g,1,tindex(2))*wt2)    ! zgcmxy  Atm state, default=30m
 
   !------------------------------------Fire data -------------------------------------------------------
- 
-        nindex(1) = yr-1848
-        nindex(2) = nindex(1)+1
-        if (yr .lt. 1850 .or. const_climate_hist) nindex(1:2) = 2
-        if (yr .ge. 2010 .and. .not. const_climate_hist) nindex(1:2) = 161
-      
+
         model_filter: if (use_cn .or. use_fates) then 
           if (atm2lnd_vars%loaded_bypassdata == 0 .or. (mon .eq. 1 .and. day .eq. 1 .and. tod .eq. 0)) then  
             if (masterproc .and. i .eq. 1) then 
               ! Read pop_dens streams namelist to get filename
               nu_nml = getavu()
               open(nu_nml, file=trim(NLFilename), status='old', iostat=nml_error )
+              if (nml_error /= 0) then
+                call endrun(msg='ERROR opening land namelist for HDM input')
+              end if
               call find_nlgroup_name(nu_nml, 'popd_streams', status=nml_error)
-              if (nml_error == 0) then
-                  read(nu_nml, nml=popd_streams,iostat=nml_error)
-                  if (nml_error /= 0) then
-                      call endrun(msg='ERROR reading popdens namelist')
-                  end if
+              if (nml_error /= 0) then
+                call endrun(msg='ERROR finding popd_streams namelist')
+              end if
+              read(nu_nml, nml=popd_streams,iostat=nml_error)
+              if (nml_error /= 0) then
+                call endrun(msg='ERROR reading popdens namelist')
               end if
               close(nu_nml)
               call relavu( nu_nml )
 
               ierr = nf90_open(trim(stream_fldFileName_popdens), NF90_NOWRITE, ncid)
-              ierr = nf90_inq_varid(ncid, 'lat', varid)
-              ierr = nf90_get_var(ncid, varid, smap05_lat)
-              ierr = nf90_inq_varid(ncid, 'lon', varid)
-              ierr = nf90_get_var(ncid, varid, smap05_lon)
-              ierr = nf90_inq_varid(ncid, 'hdm', varid)
-              starti(1:2) = 1 
-              starti(3)   = nindex(1)
-              counti(1) = 720
-              counti(2) = 360
-              counti(3) = 1       
-              ierr = nf90_get_var(ncid, varid, atm2lnd_vars%hdm1, starti, counti)
-              starti(3) = nindex(2)
-              if (nindex(1) .ne. nindex(2)) then 
-                  ierr = nf90_get_var(ncid, varid, atm2lnd_vars%hdm2, starti, counti)
-              else
-                  atm2lnd_vars%hdm2 = atm2lnd_vars%hdm1 
-              end if
-              ierr = nf90_close(ncid)
+              call check_netcdf_status(ierr, 'opening HDM file '//trim(stream_fldFileName_popdens))
+
+              ierr = nf90_inq_dimid(ncid, 'lon', dimid)
+              call check_netcdf_status(ierr, 'finding HDM longitude dimension')
+              ierr = nf90_inquire_dimension(ncid, dimid, len=hdm_nlon)
+              call check_netcdf_status(ierr, 'reading HDM longitude dimension')
+
+              ierr = nf90_inq_dimid(ncid, 'lat', dimid)
+              call check_netcdf_status(ierr, 'finding HDM latitude dimension')
+              ierr = nf90_inquire_dimension(ncid, dimid, len=hdm_nlat)
+              call check_netcdf_status(ierr, 'reading HDM latitude dimension')
+
+              ierr = nf90_inq_dimid(ncid, 'time', dimid)
+              call check_netcdf_status(ierr, 'finding HDM time dimension')
+              ierr = nf90_inquire_dimension(ncid, dimid, len=hdm_ntime)
+              call check_netcdf_status(ierr, 'reading HDM time dimension')
             end if
 
-            if (i .eq. 1) then 
-              call mpi_bcast (atm2lnd_vars%hdm1, 360*720, MPI_REAL8, 0, mpicom, ier)
-              call mpi_bcast (atm2lnd_vars%hdm2, 360*720, MPI_REAL8, 0, mpicom, ier)
-              call mpi_bcast (smap05_lon, 720, MPI_REAL8, 0, mpicom, ier)
-              call mpi_bcast (smap05_lat, 360, MPI_REAL8, 0, mpicom, ier)
+            if (i .eq. 1) then
+              call mpi_bcast(hdm_nlon, 1, MPI_INTEGER, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting HDM longitude dimension')
+              call mpi_bcast(hdm_nlat, 1, MPI_INTEGER, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting HDM latitude dimension')
+              call mpi_bcast(hdm_ntime, 1, MPI_INTEGER, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting HDM time dimension')
+
+              if (hdm_nlon < 1 .or. hdm_nlat < 1 .or. hdm_ntime < 1) then
+                call endrun(msg='Invalid HDM dimensions read from '//trim(stream_fldFileName_popdens))
+              end if
+
+              if (associated(atm2lnd_vars%hdm1)) then
+                if (size(atm2lnd_vars%hdm1,1) /= hdm_nlon .or. &
+                    size(atm2lnd_vars%hdm1,2) /= hdm_nlat) then
+                  deallocate(atm2lnd_vars%hdm1, atm2lnd_vars%hdm2)
+                end if
+              end if
+              if (.not. associated(atm2lnd_vars%hdm1)) then
+                allocate(atm2lnd_vars%hdm1(hdm_nlon,hdm_nlat,1))
+                allocate(atm2lnd_vars%hdm2(hdm_nlon,hdm_nlat,1))
+              end if
+              allocate(hdm_lon(hdm_nlon), hdm_lat(hdm_nlat))
+
+              if (masterproc) then
+                allocate(hdm_years(hdm_ntime))
+
+                ierr = nf90_inq_varid(ncid, 'lat', varid)
+                call check_netcdf_status(ierr, 'finding HDM latitude variable')
+                ierr = nf90_get_var(ncid, varid, hdm_lat)
+                call check_netcdf_status(ierr, 'reading HDM latitude variable')
+
+                ierr = nf90_inq_varid(ncid, 'lon', varid)
+                call check_netcdf_status(ierr, 'finding HDM longitude variable')
+                ierr = nf90_get_var(ncid, varid, hdm_lon)
+                call check_netcdf_status(ierr, 'reading HDM longitude variable')
+
+                ierr = nf90_inq_varid(ncid, 'year', varid)
+                call check_netcdf_status(ierr, 'finding HDM year variable')
+                ierr = nf90_get_var(ncid, varid, hdm_years)
+                call check_netcdf_status(ierr, 'reading HDM year variable')
+
+                if (any(hdm_lon /= hdm_lon) .or. any(hdm_lat /= hdm_lat)) then
+                  call endrun(msg='NaN encountered in HDM coordinate variables')
+                end if
+
+                if (hdm_ntime > 1) then
+                  if (any(hdm_years(2:hdm_ntime) <= hdm_years(1:hdm_ntime-1))) then
+                    call endrun(msg='HDM year variable must be strictly increasing')
+                  end if
+                end if
+
+                if (const_climate_hist .or. yr < hdm_years(1)) then
+                  nindex(1:2) = 1
+                else if (yr >= hdm_years(hdm_ntime)) then
+                  nindex(1:2) = hdm_ntime
+                else
+                  nindex(1) = 0
+                  do hdm_rec = 1,hdm_ntime-1
+                    if (yr >= hdm_years(hdm_rec) .and. yr < hdm_years(hdm_rec+1)) then
+                      nindex(1) = hdm_rec
+                      exit
+                    end if
+                  end do
+                  if (nindex(1) == 0) then
+                    call endrun(msg='Could not map model year to an HDM record')
+                  end if
+                  nindex(2) = nindex(1) + 1
+                end if
+
+                ierr = nf90_inq_varid(ncid, 'hdm', varid)
+                call check_netcdf_status(ierr, 'finding HDM variable')
+                ierr = nf90_inquire_variable(ncid, varid, ndims=nummetdims)
+                call check_netcdf_status(ierr, 'checking HDM variable rank')
+                if (nummetdims /= 3) then
+                  call endrun(msg='HDM variable must have longitude, latitude, and time dimensions')
+                end if
+                starti(1:2) = 1
+                starti(3)   = nindex(1)
+                counti(1) = hdm_nlon
+                counti(2) = hdm_nlat
+                counti(3) = 1
+                ierr = nf90_get_var(ncid, varid, atm2lnd_vars%hdm1, starti, counti)
+                call check_netcdf_status(ierr, 'reading first HDM record')
+                starti(3) = nindex(2)
+                if (nindex(1) /= nindex(2)) then
+                  ierr = nf90_get_var(ncid, varid, atm2lnd_vars%hdm2, starti, counti)
+                  call check_netcdf_status(ierr, 'reading second HDM record')
+                else
+                  atm2lnd_vars%hdm2 = atm2lnd_vars%hdm1
+                end if
+
+                write(iulog,'(a,3(i0,a),2(i0,a))') 'HDM input: ', hdm_nlon, ' x ', hdm_nlat, &
+                     ' grid, ', hdm_ntime, ' records; using records ', nindex(1), ' and ', nindex(2), '.'
+
+                ierr = nf90_close(ncid)
+                call check_netcdf_status(ierr, 'closing HDM file')
+                deallocate(hdm_years)
+              end if
+
+              call mpi_bcast(nindex, 2, MPI_INTEGER, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting HDM record indices')
+              call mpi_bcast(atm2lnd_vars%hdm1, hdm_nlon*hdm_nlat, MPI_REAL8, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting first HDM record')
+              call mpi_bcast(atm2lnd_vars%hdm2, hdm_nlon*hdm_nlat, MPI_REAL8, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting second HDM record')
+              call mpi_bcast(hdm_lon, hdm_nlon, MPI_REAL8, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting HDM longitude coordinates')
+              call mpi_bcast(hdm_lat, hdm_nlat, MPI_REAL8, 0, mpicom, ier)
+              call check_mpi_status(ier, 'broadcasting HDM latitude coordinates')
             end if
           end if
 
           !figure out which point to get
           if (atm2lnd_vars%loaded_bypassdata == 0) then 
-            mindist=99999
-            do thisx = 1,720
-              do thisy = 1,360
-                  if (ldomain%lonc(g) .lt. 0) then
-                      if (smap05_lon(thisx) >= 180) smap05_lon(thisx) = smap05_lon(thisx)-360._r8
-                  else if (ldomain%lonc(g) .ge. 180) then
-                      if (smap05_lon(thisx) < 0) smap05_lon(thisx) = smap05_lon(thisx) + 360._r8
-                  end if
-                  thisdist = 100*((smap05_lat(thisy) - ldomain%latc(g))**2 + &
-                          (smap05_lon(thisx) - ldomain%lonc(g))**2)**0.5
-                  if (thisdist .lt. mindist) then
-                      mindist = thisdist
-                      atm2lnd_vars%hdmind(g,1) = thisx
-                      atm2lnd_vars%hdmind(g,2) = thisy
-                  end if
-              end do
+            mindist = huge(1._r8)
+            do thisx = 1,hdm_nlon
+              thisdist = abs(modulo(hdm_lon(thisx) - ldomain%lonc(g) + 180._r8, 360._r8) - 180._r8)
+              if (thisdist < mindist) then
+                mindist = thisdist
+                atm2lnd_vars%hdmind(g,1) = thisx
+              end if
+            end do
+
+            mindist = huge(1._r8)
+            do thisy = 1,hdm_nlat
+              thisdist = abs(hdm_lat(thisy) - ldomain%latc(g))
+              if (thisdist < mindist) then
+                mindist = thisdist
+                atm2lnd_vars%hdmind(g,2) = thisy
+              end if
             end do
           end if
           !get weights for interpolation
           wt1(1) = 1._r8 - (thiscalday -1._r8)/365._r8
           wt2(1) = 1._r8 - wt1(1)
-          atm2lnd_vars%forc_hdm(g) = atm2lnd_vars%hdm1(atm2lnd_vars%hdmind(g,1),atm2lnd_vars%hdmind(g,2),1)*wt1(1) + &
-                                     atm2lnd_vars%hdm2(atm2lnd_vars%hdmind(g,1),atm2lnd_vars%hdmind(g,2),1)*wt2(1)
+          hdm_value1 = atm2lnd_vars%hdm1(atm2lnd_vars%hdmind(g,1),atm2lnd_vars%hdmind(g,2),1)
+          hdm_value2 = atm2lnd_vars%hdm2(atm2lnd_vars%hdmind(g,1),atm2lnd_vars%hdmind(g,2),1)
+          if (hdm_value1 /= hdm_value1 .or. hdm_value2 /= hdm_value2) then
+            call endrun(msg='NaN encountered at an ELM gridcell in HDM input data')
+          end if
+          if (hdm_value1 < 0._r8 .or. hdm_value2 < 0._r8) then
+            call endrun(msg='Negative population density at an ELM gridcell in HDM input data')
+          end if
+          atm2lnd_vars%forc_hdm(g) = hdm_value1*wt1(1) + hdm_value2*wt2(1)
 
           if (atm2lnd_vars%loaded_bypassdata .eq. 0 .and. masterproc .and. i .eq. 1) then 
             ! Read light_streams namelist to get filename
@@ -1554,6 +1675,29 @@ contains
     end do
 
   end subroutine lnd_export
+
+  !===============================================================================
+  subroutine check_netcdf_status(status_code, operation)
+    use netcdf, only : nf90_noerr, nf90_strerror
+
+    integer, intent(in) :: status_code
+    character(len=*), intent(in) :: operation
+
+    if (status_code /= nf90_noerr) then
+      call endrun(msg='HDM NetCDF error while '//trim(operation)//': '// &
+           trim(nf90_strerror(status_code)))
+    end if
+  end subroutine check_netcdf_status
+
+  !===============================================================================
+  subroutine check_mpi_status(status_code, operation)
+    integer, intent(in) :: status_code
+    character(len=*), intent(in) :: operation
+
+    if (status_code /= 0) then
+      call endrun(msg='HDM MPI error while '//trim(operation))
+    end if
+  end subroutine check_mpi_status
 
 end module lnd_import_export
 

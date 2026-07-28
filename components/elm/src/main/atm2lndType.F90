@@ -238,8 +238,10 @@ contains
     allocate(this%hdmind                      (begg:endg,2))        ; this%hdmind                      (:,:)   = ival_int
     allocate(this%forc_hdm                      (begg:endg))        ; this%forc_hdm                      (:)   = ival
     allocate(this%forc_lnfm                     (begg:endg))        ; this%forc_lnfm                     (:)   = ival
-    allocate(this%hdm1                          (720,360,1))        ; this%hdm1                      (:,:,:)   = ival
-    allocate(this%hdm2                          (720,360,1))        ; this%hdm2                      (:,:,:)   = ival
+    ! HDM arrays are resized to the dimensions found in the input file
+    ! during the first coupler-bypass read.
+    allocate(this%hdm1                              (1,1,1))        ; this%hdm1                      (:,:,:)   = ival
+    allocate(this%hdm2                              (1,1,1))        ; this%hdm2                      (:,:,:)   = ival
     allocate(this%lnfm                     (begg:endg,2920))        ; this%lnfm                        (:,:)   = ival 
     allocate(this%ndep1                          (144,96,1))        ; this%ndep1                     (:,:,:)   = ival
     allocate(this%ndep2                          (144,96,1))        ; this%ndep2                     (:,:,:)   = ival
