@@ -94,6 +94,8 @@ contains
     integer ::  hdm_nlon, hdm_nlat, hdm_ntime, hdm_rec
     integer, allocatable :: hdm_years(:)
     real(r8), allocatable :: hdm_lat(:), hdm_lon(:)
+    integer ::  ndep_ntime, ndep_rec
+    integer, allocatable :: ndep_years(:)
     real(r8) :: smapt62_lat(94), smapt62_lon(192)
     real(r8) :: smap2_lat(96), smap2_lon(144)
     real(r8) :: thisdist, mindist, thislon, hdm_value1, hdm_value2
@@ -1006,13 +1008,10 @@ contains
 
    !------------------------------------Nitrogen deposition----------------------------------------------
 
-          !DMR note - ndep will NOT be correct if more than 1850 years of model
-          !spinup (model year > 1850)
-          nindex(1) = min(max(yr-1848,2), 168)
-          nindex(2) = min(nindex(1)+1, 168)
-
-          if (atm2lnd_vars%loaded_bypassdata .eq. 0 .or. (mon .eq. 1 .and. day .eq. 1 .and. tod .eq. 0)) then 
-            if (masterproc .and. i .eq. 1) then 
+          ! Record index is resolved from the file's own YEAR variable (see
+          ! below), not from a hardcoded yr-1848 offset with a fixed clamp.
+          if (atm2lnd_vars%loaded_bypassdata .eq. 0 .or. (mon .eq. 1 .and. day .eq. 1 .and. tod .eq. 0)) then
+            if (masterproc .and. i .eq. 1) then
               nu_nml = getavu()
               open( nu_nml, file=trim(NLFilename), status='old', iostat=nml_error )
               call find_nlgroup_name(nu_nml, 'ndepdyn_nml', status=nml_error)
@@ -1026,26 +1025,90 @@ contains
               call relavu( nu_nml )
 
               ierr = nf90_open(trim(stream_fldFileName_ndep), nf90_nowrite, ncid)
+              call check_netcdf_status(ierr, 'opening Ndep file '//trim(stream_fldFileName_ndep))
+
+              ierr = nf90_inq_dimid(ncid, 'time', dimid)
+              call check_netcdf_status(ierr, 'finding Ndep time dimension')
+              ierr = nf90_inquire_dimension(ncid, dimid, len=ndep_ntime)
+              call check_netcdf_status(ierr, 'reading Ndep time dimension')
+
+              if (ndep_ntime < 1) then
+                call endrun(msg='Invalid Ndep time dimension read from '//trim(stream_fldFileName_ndep))
+              end if
+
+              allocate(ndep_years(ndep_ntime))
+
               ierr = nf90_inq_varid(ncid, 'lat', varid)
+              call check_netcdf_status(ierr, 'finding Ndep latitude variable')
               ierr = nf90_get_var(ncid, varid, smap2_lat)
-              ierr = nf90_inq_varid(ncid, 'lon', varid)      
+              call check_netcdf_status(ierr, 'reading Ndep latitude variable')
+
+              ierr = nf90_inq_varid(ncid, 'lon', varid)
+              call check_netcdf_status(ierr, 'finding Ndep longitude variable')
               ierr = nf90_get_var(ncid, varid, smap2_lon)
+              call check_netcdf_status(ierr, 'reading Ndep longitude variable')
+
+              ierr = nf90_inq_varid(ncid, 'YEAR', varid)
+              call check_netcdf_status(ierr, 'finding Ndep YEAR variable')
+              ierr = nf90_get_var(ncid, varid, ndep_years)
+              call check_netcdf_status(ierr, 'reading Ndep YEAR variable')
+
+              if (ndep_ntime > 1) then
+                if (any(ndep_years(2:ndep_ntime) <= ndep_years(1:ndep_ntime-1))) then
+                  call endrun(msg='Ndep YEAR variable must be strictly increasing')
+                end if
+              end if
+
+              ! Model year before the file's first year (e.g. AD/normal spinup
+              ! using fictional low year numbers): hold at the first record.
+              ! Model year at or beyond the file's last year: hold at the last
+              ! record. Otherwise use the bracketing pair for the existing
+              ! within-year linear interpolation below.
+              if (yr < ndep_years(1)) then
+                nindex(1:2) = 1
+              else if (yr >= ndep_years(ndep_ntime)) then
+                nindex(1:2) = ndep_ntime
+              else
+                nindex(1) = 0
+                do ndep_rec = 1,ndep_ntime-1
+                  if (yr >= ndep_years(ndep_rec) .and. yr < ndep_years(ndep_rec+1)) then
+                    nindex(1) = ndep_rec
+                    exit
+                  end if
+                end do
+                if (nindex(1) == 0) then
+                  call endrun(msg='Could not map model year to an Ndep record')
+                end if
+                nindex(2) = nindex(1) + 1
+              end if
+
               ierr = nf90_inq_varid(ncid, 'NDEP_year', varid)
+              call check_netcdf_status(ierr, 'finding Ndep NDEP_year variable')
               starti(1:2) = 1
               starti(3)   = nindex(1)
               counti(1)   = 144
               counti(2)   = 96
               counti(3)   = 1
               ierr = nf90_get_var(ncid, varid, atm2lnd_vars%ndep1, starti, counti)
-              if (nindex(1) .ne. nindex(2)) then 
+              call check_netcdf_status(ierr, 'reading first Ndep record')
+              if (nindex(1) .ne. nindex(2)) then
                 starti(3) = nindex(2)
                 ierr = nf90_get_var(ncid, varid, atm2lnd_vars%ndep2, starti, counti)
+                call check_netcdf_status(ierr, 'reading second Ndep record')
               else
                 atm2lnd_vars%ndep2 = atm2lnd_vars%ndep1
               end if
+
+              write(iulog,'(a,i0,a,2(i0,a))') 'Ndep input: ', ndep_ntime, &
+                   ' records; using records ', nindex(1), ' and ', nindex(2), '.'
+
               ierr = nf90_close(ncid)
+              call check_netcdf_status(ierr, 'closing Ndep file')
+              deallocate(ndep_years)
              end if
              if (i .eq. 1) then
+               call mpi_bcast (nindex, 2, MPI_INTEGER, 0, mpicom, ier)
+               call check_mpi_status(ier, 'broadcasting Ndep record indices')
                call mpi_bcast (atm2lnd_vars%ndep1, 144*96, MPI_REAL8, 0, mpicom, ier)
                call mpi_bcast (atm2lnd_vars%ndep2, 144*96, MPI_REAL8, 0, mpicom, ier)
                call mpi_bcast (smap2_lon, 144, MPI_REAL8, 0, mpicom, ier)
