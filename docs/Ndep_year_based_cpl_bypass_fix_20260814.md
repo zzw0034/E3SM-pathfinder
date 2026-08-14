@@ -97,22 +97,33 @@ While processing ... openmpi/openmpi-4.1.7-test ...
   节点，`--constraint=BL` 限定只用 `blc` 型号后**依然失败**，排除了硬件
   差异这个假设。
 - 一度怀疑是 `config_machines.xml` 里 `DefApps` 之后又重复显式
-  `load gcc/12.4.0`/`load openmpi/5.0.5` 触发的，删掉这两行重复加载后
-  **依然失败**——`case.setup --reset` 生成的错误信息里 module 列表照样包含
-  gcc/openmpi，说明 `DefApps` 自己就会展开出这两个模块，不是重复加载的锅。
-  这次改动已撤销。
-- 最终确认：**同一份 module 加载序列，走 Lmod 的 Python 接口（CIME 用的
-  `lmod python load ...`）会在加载 `gcc/12.4.0` 时触发一个内部的"load
-  storm"误判并直接判定为致命错误；走普通 shell 的 `module` 命令时，同样的
-  内部报错会出现，但 Lmod 自己的兜底/重试逻辑能让模块最终正确加载上，shell
-  脚本本身没有 `set -e`，不会因为一次非零退出码就中止。** 这是 Lmod
-  Python 接口本身对这个瞬时报错处理更严格（不容错），不是 CIME 配置或者这
-  次代码改动的问题。
+  `load gcc/12.4.0`/`load openmpi/5.0.5` 触发的，删掉这两行重复加载、跑
+  `case.setup --reset` 验证时**表面上依然失败**——但这是判断过早：
+  `case.setup --reset` 的报错信息里出现 `gcc/12.4.0`，只是因为 Lmod 的错误
+  追踪会把 `DefApps` 级联加载到的模块也列出来，**不代表 CIME 还在重复显式
+  请求它**。当时把这次改动撤销了，判断错误，第 3 节里已经纠正并重新验证过。
+- 用户提示核对 `.bashrc` 之后，注意到 `.bashrc` 从来不显式 `load
+  gcc/12.4.0`/`openmpi/5.0.5`（`DefApps` 自己就会带出这两个默认值），而且
+  是逐个 `module load`，不是一条命令里塞一大串。专门做了隔离测试：完全照
+  `.bashrc` 的方式（跳过显式 gcc/openmpi、逐个加载）连续跑两遍，**九步全部
+  返回码 0，一次"load storm"都没有触发**——不是"容错扛过去"，是压根不
+  发生。
+- 最终确认真正的触发条件：**在同一条 `module load` 命令里，如果 `gcc/12.4.0`
+  被处理两次**（一次是 `DefApps` 自己的级联加载，一次是紧接着又显式写一遍
+  `load gcc/12.4.0`），Lmod 的依赖解析就会在这次重复处理里触发"load storm"
+  误判（>500 次重复加载，牵出一个不相关的 `openmpi/openmpi-4.1.7-test`
+  模块）。走 shell 的 `module` 命令时，这个报错是非致命的（返回非 0，但
+  Lmod 最终还是算出了正确结果，脚本没写 `set -e` 就继续跑下去了）；走 CIME
+  用的 Lmod Python 接口（`lmod python load ...`）时，这个报错被当成致命错误
+  直接中止 `case.build`。**去掉这两行冗余的显式加载，让 `DefApps` 只被处理
+  一次，两条路径都不会再触发这个问题**——第 3 节里用真正的 `case.build`
+  重新验证过，问题已经解决，不再需要绕过。
 
-  真正让我们注意到这条线索的，是用户之前一次在 `parallel` 分区跑成功的运行
-  脚本（`20260619_..._ad_spinup` 的提交脚本）——它完全不走 `module load`，
-  直接把 `LD_LIBRARY_PATH` 硬编码指向 Spack 编译好的库路径后 `srun
-  e3sm.exe`，绕开了 Python Lmod 接口，这才是它能跑通的真正原因。
+  真正让我们最先注意到"或许不需要 module load"这条线索的，是用户之前一次
+  在 `parallel` 分区跑成功的运行脚本（`20260619_..._ad_spinup` 的提交
+  脚本）——它完全不走 `module load`，直接把 `LD_LIBRARY_PATH` 硬编码指向
+  Spack 编译好的库路径后 `srun e3sm.exe`。这个脚本本身不需要改，但它提示了
+  "或许根本不需要重复显式加载 gcc/openmpi"这个方向。
 
 **注意**：`case.setup --reset` 在诊断过程中失败了一次，连带清空了
 `20260712_Southeast_hires_s7P_s8hdm_ICB1850CNRDCTCBC_ad_spinup` 这个 case
@@ -156,6 +167,43 @@ CMake 报 `NETCDF not found`；补上这几个环境变量的显式 `export` 后
 字节，2026-07-17 14:06）。构建后 `bld/e3sm.exe` 更新为 27083600 字节，
 2026-08-14 16:29。
 
+### 第三次：真正修复 `case.build` 的 Lmod 问题，不再需要绕过
+
+在用户提示核对 `.bashrc` 之后，按上面"排查过程"最后确认的根因，重新在
+`cime_config/machines/config_machines.xml` 的 `pathfinder` 机器、
+`compiler="gnu" mpilib="openmpi"` 那个 `<modules>` 块里删掉两行冗余的显式
+加载：
+
+```diff
+        <command name="load">DefApps</command>
+-       <command name="load">gcc/12.4.0</command>
+-       <command name="load">openmpi/5.0.5</command>
+        <command name="load">cmake/3.30.5</command>
+```
+
+（保留了一段注释解释原因，方便以后维护这个文件的人不会又加回去。）
+
+这次没有再跑 `case.setup --reset`（上次跑这个命令中途失败，删空了 case
+自己的配置文件，见下面"注意"），而是直接手动把同样两行从这个 case 自己
+缓存的 `env_mach_specific.xml` 里删掉，然后跑 `./case.build`：
+
+- Slurm Job ID：`460471`（第一次 `460469` 因为 `cmake_macros/CMakeLists.txt`
+  缺失失败，是诊断过程中意外删掉、当时没补全的另一个文件，补上后重跑）
+- 资源：同上（`parallel` / `normal` QOS / `--constraint=BL`，1 node，32
+  cpus，120G mem）
+- Elapsed：1 分 14 秒
+- 结果：`MODEL BUILD HAS FINISHED SUCCESSFULLY`，退出码 0，**全程没有任何
+  Lmod 报错**
+
+`config_machines.xml` 这处改动是**独立于 Ndep 年份修复的另一个 bug**，只是
+在验证 Ndep 修复的过程中顺带发现并修好的。以后任何 `case.build`/
+`case.setup --reset`/新建 case，都应该不会再撞上这个问题——但**只有走过
+`case.setup --reset`（或新建 case）、重新生成过 `env_mach_specific.xml` 的
+case 才会吃到这个修复**；已经存在、`env_mach_specific.xml` 是旧版本的其他
+case（比如这次涉及到的两个姊妹 case），如果以后要对它们跑 `case.build`，
+第一次大概率还是会撞上同样的报错，需要手动删掉这两行，或者干脆跑一次
+`case.setup --reset`（现在 module 加载这步已经不会失败了，可以放心跑）。
+
 ## 尚未做的验证（重要，不要当作已完成）
 
 - **没有做 runtime smoke test。** 这次只验证了"代码改动能正确编译并链接
@@ -163,10 +211,6 @@ CMake 报 `NETCDF not found`；补上这几个环境变量的显式 `export` 后
   跑几步、检查 land 日志里 `Ndep input: ... records; using records ... and
   ...` 这行输出、核对 history 里 `NDEP_TO_SMINN` 是否真的按年份变化了。
   在把这份新 `e3sm.exe` 用到任何生产 case 之前，应该先做这一步。
-- **没有验证 `case.build` 本身的 Lmod 问题是否已解决**——这次是绕过它，
-  不是修复它。以后任何需要走标准 `case.build`/`case.submit` 流程的场景
-  （比如新建 case），大概率还会撞上同样的 Python Lmod 报错，需要单独处理
-  （比如同样绕过，或者联系 Pathfinder 管理员）。
 - 尚未决定是否要重跑 2016-2023 这段历史（用修复后的代码，从 2015/2016 年
   附近的 restart 分支，只重跑这几年，不需要整段 1850-2023 重来）——这是
   用户自己的决定，取决于下游分析是否具体用到这几年的结果。
@@ -179,6 +223,12 @@ CMake 报 `NETCDF not found`；补上这几个环境变量的显式 `export` 后
 
 ## 仓库状态
 
-改动已提交到本地 Git（`components/elm/src/cpl/lnd_import_export.F90`），
+两处改动都已提交到本地 Git：
+
+- `components/elm/src/cpl/lnd_import_export.F90`——Ndep 按年份读取的主要
+  修复
+- `cime_config/machines/config_machines.xml`——顺带修复的 `case.build`
+  Lmod load-storm 问题
+
 分支为本地 `master`，领先 `origin/master`（尚未 push，按仓库惯例不主动
 push 到远程）。
