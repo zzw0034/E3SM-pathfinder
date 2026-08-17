@@ -127,7 +127,7 @@ contains
     character(len=CL)  :: stream_fldFileName_lightng ! lightning stream filename to read
     character(len=CL)  :: stream_fldFileName_popdens ! poplulation density stream filename
     character(len=CL)  :: stream_fldFileName_ndep    ! nitrogen deposition stream filename
-    logical :: use_sitedata, has_zonefile, use_daymet, use_livneh
+    logical :: use_sitedata, has_zonefile, use_daymet, use_livneh, use_daymet_fut
     data caldaym / 1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366 /    
 
     ! Constants to compute vapor pressure
@@ -262,9 +262,16 @@ contains
 
           use_livneh = .false.
           use_daymet = .false.
-          if(index(metdata_type, 'livneh') .gt. 0) then 
+          use_daymet_fut = .false.
+          if(index(metdata_type, 'livneh') .gt. 0) then
               use_livneh = .true.
-          else if (index(metdata_type, 'daymet') .gt. 0) then 
+          else if (index(metdata_type, 'daymet-fut') .gt. 0) then
+              ! CanESM5-DBCCA future (SSP) TESSFA2 forcing, 2024-2100. Shares the
+              ! era5+daymet read path (grid, packing, zone_mappings.txt) but is a
+              ! separate file series keyed to its own startyear_met (see below).
+              use_daymet_fut = .true.
+              use_daymet = .true.
+          else if (index(metdata_type, 'daymet') .gt. 0) then
               use_daymet = .true.
           end if
  
@@ -327,7 +334,20 @@ contains
             atm2lnd_vars%endyear_met_spinup = 590 !100
             atm2lnd_vars%endyear_met_trans  = 590 !100
           else if (atm2lnd_vars%metsource == 6) then
-            if (use_daymet) then
+            if (use_daymet_fut) then
+              ! File's record 1 is a dummy pad year (2023, never read: the future
+              ! case's model year is always >= 2024) so that startyear_met falls
+              ! strictly below the run's first real year. That keeps the shared
+              ! per-timestep bound check a few lines below this block --
+              ! "yr .le. startyear_met" -- false for the entire run, which is
+              ! required: with startyear_met == the run's first real year (2024),
+              ! that check would stay true for all of 2024 and wrap tindex back to
+              ! record 1 every step, re-reading 2024-01-01 all year instead of
+              ! advancing. See future_climate/README_cpl_bypass_future.md.
+              atm2lnd_vars%startyear_met      = 2023
+              atm2lnd_vars%endyear_met_spinup = 2023
+              atm2lnd_vars%endyear_met_trans  = 2100
+            else if (use_daymet) then
               atm2lnd_vars%startyear_met      = 1980
               atm2lnd_vars%endyear_met_spinup = 1999
               atm2lnd_vars%endyear_met_trans  = 2023
@@ -338,10 +358,13 @@ contains
             end if
           end if
 
-          if (use_livneh) then 
+          if (use_livneh) then
               atm2lnd_vars%startyear_met      = 1950
               atm2lnd_vars%endyear_met_spinup = 1969
-          else if (use_daymet) then 
+          else if (use_daymet_fut) then
+              atm2lnd_vars%startyear_met      = 2023
+              atm2lnd_vars%endyear_met_spinup = 2023
+          else if (use_daymet) then
               atm2lnd_vars%startyear_met      = 1980
               atm2lnd_vars%endyear_met_spinup = atm2lnd_vars%endyear_met_trans
           end if
@@ -435,7 +458,9 @@ contains
                     !metdata_fname = 'WCYCL1850S.ne30_' // trim(metvars(v)) // '_0076-0100_z' // zst(2:3) // '.nc'
                     metdata_fname = 'CBGC1850S.ne30_' // trim(metvars(v)) // '_0566-0590_z' // zst(2:3) // '.nc'
             else if (atm2lnd_vars%metsource == 6) then
-                if (use_daymet) then
+                if (use_daymet_fut) then
+                    metdata_fname = 'DBCCA_Daymet_TESSFA2_' // trim(metvars(v)) // '_2023-2100_z' // zst(2:3) // '.nc'
+                else if (use_daymet) then
                     metdata_fname = 'Daymet_ERA5_TESSFA.4km_' // trim(metvars(v)) // '_1980-2023_z' // zst(2:3) // '.nc'
                 else
                     metdata_fname = 'ERA5_' // trim(metvars(v)) // '_1950-2025_z' // zst(2:3) // '.nc'
