@@ -415,6 +415,57 @@ Beginning timestep : 2020-01-01_01:00:00
 的 Ndep，不会修复**已经完成**的历史 run 里 2017-2023 那 7 年被冻结在 2016
 年值的状态。是否需要用新代码重跑这段历史，见上一节。
 
+## 5. `pfc*` 节点 MPI_Init 系统性失败（2026-08-17，与 Ndep 代码无关，记录备查）
+
+在做一次不相关的 `/projects` vs `/scratch` I/O 对比测试时（8 节点、672 任务、
+84 任务/节点，对应 `pfc*` 机型的核数），`e3sm.exe` 在 **MPI_Init 阶段**直接
+失败：
+
+```text
+It looks like MPI_INIT failed for some reason...
+  ompi_mpi_init: ompi_mpi_instance_init failed
+  --> Returned "Out of resource" (-2) instead of "Success" (0)
+```
+
+### 排查过程
+
+- 一度怀疑是任务规模太大触发资源耗尽，但用一个方法论有问题的"按规模二分"
+  脚本（没有 `cd` 进正确的 RUNDIR，任务数也没和 case 实际配置的 NTASKS 对
+  上）得到的结果不可信，不能作为证据。
+- 排除了常见嫌疑：
+  - `ulimit -l`（锁定内存）：登录节点和计算节点上都确认 `unlimited`
+  - 共享内存：`/dev/shm` 378G，`shmmax`/`shmall` 内核默认上限（巨大），远
+    没有用满
+  - 文件描述符：`ulimit -n` 131072，足够
+  - module 环境：确认 `Currently Loaded Modules` 里 12 个模块都正确加载
+  - 环境变量传递：`srun --export=ALL` 已经在用
+- **真正有效的对照实验**：直接复用已经在 `blc` 节点上跑成功过的 smoke test
+  case（168 任务、2 节点，`RUNDIR`/命名列表都是对的、`NTASKS` 完全匹配），
+  **只把 `--constraint` 从 `BL` 换成 `PF`，其他一个字节都不改**，同样的
+  `"Out of resource"` MPI_Init 失败照样出现。这是唯一严格控制变量、只换硬件
+  类型的测试，结论可信。
+- 失败是**部分任务级别的**（比如 84 个任务里只有十几个报错崩溃），不是全部
+  同时死掉——这会导致存活的任务卡在等待崩溃任务响应的 MPI 集合通信操作上，
+  整个作业**假死**（Slurm 里显示 `RUNNING`，但日志文件几分钟没有任何新内容
+  写入，需要靠对比日志的修改时间戳和当前时间来判断，不能只看 `squeue` 的
+  状态字段）。
+
+### 结论
+
+**`pfc*` 节点本身的 InfiniBand/MPI 初始化有系统性问题，和 Ndep 代码、
+CPL_BYPASS 修复、任务规模、我们的 Slurm 脚本写法都无关。** `blc*` 节点
+（128 核，`--constraint=BL`）在同样的场景下一直工作正常。`pfc*` 节点还有另
+一个代际差异（部分是 `IB,HDR,PF`、部分是 `IB,NDR,PF`，网络代际不统一，见
+本文档更早关于 `sinfo -N -o '%N %f'` 的记录），可能和这个 MPI 初始化问题有
+关联，但没有确认因果关系——这需要系统管理员权限才能进一步排查（查 IB HCA
+固件/驱动版本、PMIx 配置等），不是应用层能解决的。
+
+**How to apply**：以后任何需要多节点 MPI 并行的作业，`--constraint=BL` 是
+唯一验证过可靠工作的选择；`pfc*`（`--constraint=PF`）目前应该避免用于任何
+真正需要跑完的生产作业，除非先联系管理员确认这个 MPI 初始化问题已经解决。
+判断一个"看起来在跑"的作业是不是真的假死，别只看 `squeue` 的 `ST` 列，要
+去对比它实际输出文件的最后修改时间和当前时间。
+
 ## 仓库状态
 
 两处改动都已提交到本地 Git：
