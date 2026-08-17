@@ -204,13 +204,207 @@ case（比如这次涉及到的两个姊妹 case），如果以后要对它们�
 第一次大概率还是会撞上同样的报错，需要手动删掉这两行，或者干脆跑一次
 `case.setup --reset`（现在 module 加载这步已经不会失败了，可以放心跑）。
 
-## 尚未做的验证（重要，不要当作已完成）
+## 4. Runtime smoke test（2026-08-14/15）——完整排查过程和最终验证
 
-- **没有做 runtime smoke test。** 这次只验证了"代码改动能正确编译并链接
-  成新的 `e3sm.exe`"，**没有**像 HDM 那次修复一样，另开一个独立 case 实际
-  跑几步、检查 land 日志里 `Ndep input: ... records; using records ... and
-  ...` 这行输出、核对 history 里 `NDEP_TO_SMINN` 是否真的按年份变化了。
-  在把这份新 `e3sm.exe` 用到任何生产 case 之前，应该先做这一步。
+编译验证通过之后，另开了一个独立的轻量 case 做真正的 runtime 验证（不影响任何
+生产 case），过程中连续撞上好几个和 Ndep 代码本身无关、但下次做类似事情一定会
+再遇到的坑。按遇到的顺序记录。
+
+### 4.1 建测试 case：`create_clone --keepexe`
+
+```bash
+cd /projects/hpcl-cli185/proj-shared/zw5/E3SM/cime/scripts
+./create_clone --case .../e3sm_cases/20260814_ndep_fix_smoke \
+  --clone .../e3sm_cases/20260723_Southeast_hires_s7P_s8hdmfix_harvfix_ICB20TRCNPRDCTCBC \
+  --keepexe
+```
+
+**坑 1：`--keepexe` 会把 `RUNDIR` 也指向被克隆的那个原 case 的运行目录，不只是
+`EXEROOT`。** 如果直接跑起来会往生产历史 run 的运行目录里写文件（覆盖
+`lnd_in`、日志等）。克隆完必须立刻手动 `xmlchange RUNDIR=` 指到一个独立目录，
+再 `preview_namelists` 重新生成一遍。
+
+### 4.2 挑 restart：只有稀疏的几个可用
+
+历史 case 只保留了 6 个 restart：1850/1879/1908/1937/1966/1995/2024（间隔约 29
+年，不是文档里写的 `REST_N=20`，可能中间的被清理过），**1995 到 2024 之间没有
+任何一个**。想测 2016 年之后又要避免重新花时间从 1995 年往后跑，只能先接受用
+2024-01-01 这份。
+
+### 4.3 `BUILD_COMPLETE` 被 `case.setup --reset` 顺带重置成 FALSE
+
+在诊断 §3 提到的那次失败的 `case.setup --reset` 之后，这个 flag 也被清空了，
+新 case 继承过来后第一次 `.case.run` 直接报 `ERROR: BUILD_COMPLETE is not
+true`。手动 `xmlchange BUILD_COMPLETE=TRUE` 修复（执行文件本身没问题，只是这
+个状态位被误清）。
+
+### 4.4 `-DCPL_BYPASS` 编译宏在重新编译后消失——最隐蔽的一个坑
+
+修好 Lmod 之后重新编译，`case.build` 本身成功，但一提交真正的 run 就在耦合器
+初始化阶段报错：
+
+```
+ERROR: (seq_mct_drv) ERROR: if prognostic surface model must also have atm present
+```
+
+查了这行报错的源码（`driver-mct/main/cime_comp_mod.F90:2001`）：
+
+```fortran
+#ifndef CPL_BYPASS
+    if ((ice_prognostic .or. ocn_prognostic .or. lnd_prognostic) .and. .not. atm_present) then
+       call shr_sys_abort(subname//' ERROR: if prognostic surface model must also have atm present')
+    endif
+#endif
+```
+
+这个检查被 `#ifndef CPL_BYPASS` 包住，**只有编译时没定义 `CPL_BYPASS` 才会存
+在**。说明这次重新编译出来的可执行文件，driver 部分根本没有带 `-DCPL_BYPASS`。
+
+排查这个宏到底应该从哪来，找了很久都找不到：
+
+- `env_build.xml`（`ELM_CONFIG_OPTS`、`USER_CPPDEFS`）——没有
+- `components/elm/cime_config/config_compsets.xml`（compset 定义本身）——没有
+- 每个 case 自己的 `cmake_macros/*.cmake`、共享模板
+  `cime_config/machines/cmake_macros/pathfinder_gnu.cmake`——都没有
+- CIME 核心 `cime/CIME/build.py`、ELM/driver 各自的 `buildlib_cmake`——都没有
+- 共享编译目录的 `CMakeCache.txt`——也没有（说明不是持久缓存的值，是每次编译
+  重新拼出来的）
+
+**真正来源是 `elm-olmt`（`/projects/hpcl-cli185/proj-shared/zw5/elm-olmt`）这个
+外部 Python 封装工具，不是 CIME/E3SM 自身的机制。** 用户提示去看对应的 OLMT
+`.cfg` 文件（`Southeast_hires_lndseries_s7P_s8hdm.cfg`）才发现 `[simulation]`
+段里有 `use_cpl_bypass = True`；再查 `elm-olmt/model_ELM/main.py` 找到具体逻辑
+（约 1011-1012 行）：
+
+```python
+if (os.path.isfile("./cmake_macros/universal.cmake")):
+    os.system("echo 'string(APPEND CPPDEFS \" -DCPL_BYPASS\")' >> cmake_macros/universal.cmake")
+```
+
+也就是说：**OLMT 在最初建 case 时，如果 cfg 里 `use_cpl_bypass = True`，会自己
+往 `cmake_macros/universal.cmake` 追加这一行**，把 `-DCPL_BYPASS` 一次性写死进
+这个 case 的构建配置里，纯 CIME 侧完全查不到、也不会自动重新生成。这次因为
+`case.setup --reset` 中途失败删空了 `cmake_macros/`，后来手动从姊妹 case 复制
+文件补回来时，**姊妹 case 自己的 `universal.cmake` 里恰好也没有这一行**（可能
+那个姊妹 case 建立时机或方式不同），于是这行关键设置就在"修复"过程中悄悄丢失
+了。
+
+**修复**：手动把这一行加回该 case 的 `cmake_macros/universal.cmake`：
+
+```bash
+echo 'string(APPEND CPPDEFS " -DCPL_BYPASS")' >> cmake_macros/universal.cmake
+```
+
+加完之后还踩了两个连环坑：
+
+1. **仅仅改了 `.cmake` 文件内容，`make` 不会自动重新配置。** `cmake_macros`
+   文件内容变了，但 `CMakeCache.txt` 还在，`cmake_check_build_system` 只检查
+   顶层文件的时间戳，不会因为宏文件内容变化就触发完整重新 configure。必须手
+   动删掉 `bld/cmake-bld/CMakeCache.txt` 强制下次 `make` 完整重新 configure。
+2. **就算强制重新 configure 了，已经存在且比源码新的 `.o` 文件也不会自动重
+   编。** 第一次强制重新 configure 后的编译日志里，`driver-mct` 的
+   `cime_comp_mod.F90` 确实带上了 `-DCPL_BYPASS`（因为它这次真的被重新编译
+   了），但我们改过的 `lnd_import_export.F90` 完全没出现在日志里——它的
+   `.o` 时间戳比源码新，`make` 认为它"已经是最新的"，直接跳过，继续用几小
+   时前**没有** `-DCPL_BYPASS` 编译出来的旧版本。必须手动
+   `touch components/elm/src/cpl/lnd_import_export.F90` 才能强制它重编。
+
+三步做完（补 `universal.cmake` → 删 `CMakeCache.txt` → `touch` 源文件 →
+`case.build`）之后，编译日志里 `lnd_import_export.F90` 和 `cime_comp_mod.F90`
+的编译命令都确认带上了 `-DCPL_BYPASS`，问题解决。
+
+**How to apply**：以后任何时候如果 CPL_BYPASS 相关的运行时行为看起来不对（比
+如耦合器报 `atm_present` 相关的错、或者 CPL_BYPASS 该有的分支没生效），第一
+件事应该是去查编译日志（`bld/*.bldlog.*.gz`）里对应源文件的编译命令有没有
+`-DCPL_BYPASS`，而不是去查 CIME 的 XML 配置——这个宏的来源在 OLMT 里，不在
+CIME 里。
+
+### 4.5 Runtime 找不到 `libpnetcdf.so.4`
+
+`.case.run` 内部会按 `env_mach_specific.xml` 自己重新构建一遍运行环境，会把
+提交脚本里手动 `export` 的 `LD_LIBRARY_PATH` 覆盖掉。改成绕开 `.case.run`，
+参考用户之前一次手写成功的运行脚本（`20260619_..._ad_spinup` 的提交脚本），
+直接：
+
+```bash
+./preview_namelists
+mkdir -p "${RUNDIR}/timing/checkpoints"
+srun --export=ALL --nodes=2 --ntasks=168 --ntasks-per-node=84 --cpu-bind=none -c 1 \
+  "${EXEROOT}/e3sm.exe" > "${RUNDIR}/e3sm_log.txt" 2>&1
+```
+
+**光在提交脚本里 `export LD_LIBRARY_PATH=...` 还不够**——`srun` 默认不会把
+调用它的批处理脚本的环境变量传给它在计算节点上启动的任务进程，必须显式加
+`--export=ALL`，否则远程任务进程拿到的是一个干净环境，同样找不到
+`libpnetcdf.so.4`。
+
+用到的库路径（Spack 编译产物，和 OLMT/case 生成的 `LD_LIBRARY_PATH` 无关，是
+手动硬编码的）：
+
+```bash
+export LD_LIBRARY_PATH=/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/parallel-netcdf-1.12.3-uxv6pfdmjakpoqesfehfvup4a6likqmv/lib:/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/netcdf-fortran-4.6.1-dpqjrikidtzwxfym4vsrrmobz77mlzwo/lib:/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/netcdf-cxx-4.2-v4pq7x4yk4cuwmiebhd2ffadlfkfkoyv/lib:/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/netcdf-c-4.9.2-tr7a3kauxhjzi6donei4k6a4cvrbpllp/lib:/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/netlib-lapack-3.11.0-eh4qxzswhku5draqpvzgzg5sdaj2iuio/lib64:/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/openmpi-5.0.5-ajpfcyc4knmqijf7z6bdiihugbld46zz/lib:/software/baseline/nsp/gcc/12.4.0/lib64:/software/baseline/nsp/spack-envs/base-25.05/opt/gcc-12.4.0/hdf5-1.14.5-62cn3btjtjtipyahzkw24m6m5k5obqxp/lib
+```
+
+补充确认：OLMT 自己正常提交任务走的是标准的 `./case.submit`（进而调用
+`.case.run`），不是绕开它——查了 `elm-olmt/model_ELM/main.py` 的
+`submit_case()`，也查了 git 历史，这条路径一直都是标准 CIME 流程。这次
+`.case.run` 报错更可能是这个测试 case 的 `env_mach_specific.xml`（从姊妹 case
+复制来的）细节没有完全对上，不是 `.case.run` 机制本身有问题；OLMT 平时跑得动
+是因为它走的是完整、正确生成的 case 状态。手写 `srun` 只是这次绕过验证问题的
+手段，不代表以后都应该抛弃 `case.submit`。
+
+### 4.6 测试起始日期不能超出气象强迫文件覆盖范围
+
+一开始用 `RUN_STARTDATE=2024-01-01`（配合 2024-01-01 restart），但历史气象
+bypass 文件只到 2023 年底（`endyear_met_trans=2023`），而且这段代码对"年份超
+出气象文件覆盖范围"**完全没有边界检查**，会直接算出越界的数组下标。
+
+解决办法：**`finidat`（初始状态用哪份 restart）和 `RUN_STARTDATE`（模拟时钟从
+哪天开始）在 CIME 里是两个独立设置**，这个 case 的命名列表本来就关掉了年份一
+致性检查（`check_finidat_year_consistency = .false.`）。于是继续用 2024-01-01
+restart 的状态，但把 `RUN_STARTDATE` 单独改成 `2020-01-01`——落在气象数据覆盖
+范围内，又晚于旧代码冻结的 2016 年，两头都不耽误。
+
+### 4.7 墙钟时间
+
+20 分钟不够用（超时被杀，但日志显示只是卡在同一处没往前走，不是明确报错）；
+中间提交过 1 小时的但还没排上就被换成 5 小时；**最终真正跑起来只用了 7 分钟**
+就完成。最早 20 分钟超时的具体原因没有查清（怀疑是集群负载波动或者节点本地
+缓存冷启动的一次性开销），不完全确定，以后如果又出现"跑很久卡在同一行不动"
+的情况，先怀疑是排队/节点分配问题，不一定是代码卡死。
+
+### 4.8 最终验证结果
+
+`lnd.log.260814-182200`：
+
+```text
+Successfully initialized the land model
+HDM input: 504 x 324 grid, 251 records; using records 171 and 172.
+Ndep input: 253 records; using records 172 and 173.
+Beginning timestep : 2020-01-01_00:00:00
+Beginning timestep : 2020-01-01_01:00:00
+```
+
+`srun` 退出码 0，干净结束。手算核对：`RUN_STARTDATE=2020-01-01`，Ndep 文件
+第 1 条记录对应 1849 年，新代码算出的下标 `2020-1849+1=172`，**和日志里
+"using records 172" 精确吻合**。用旧代码同样的年份会算出
+`min(max(2020-1848,2),168)=168`（卡死复用 2016 年那条），和 172 明显不同——
+这就是新旧代码在这个具体年份上的真实差异，用实际运行日志实锤，不是纸面推导。
+
+日志里两处 `ERROR` 字样核对过，只是变量名 `CMASS_BALANCE_ERROR`（一个诊断量
+的名字，出现在 history 变量定义表里），不是真正的运行时错误。
+
+**结论：Ndep 按年份读取的修复，代码编译正确、运行时行为也验证正确。**
+
+## 尚未做的验证
+
+- **history 输出（`NDEP_TO_SMINN` 之类）还没有核对。** 这次 smoke test 只跑了
+  2 个 3600 秒的短时间步（`STOP_N=1` 加上耦合频率导致的一点误差），没有触发
+  任何 history 写盘（`hist_htapes_wrapup` 显示"no open file to close"），只
+  确认了 land 日志里 `Ndep input:` 这行诊断信息，没有从 history 文件里独立核
+  对 `NDEP_TO_SMINN` 数值本身是不是也变了（原理上应该会，因为 `forc_ndep_grc`
+  就是直接从这两条记录插值算出来的，但没有像之前查 2016-2023 冻结问题那样再
+  单独跑一遍时间序列去交叉验证）。
 - 尚未决定是否要重跑 2016-2023 这段历史（用修复后的代码，从 2015/2016 年
   附近的 restart 分支，只重跑这几年，不需要整段 1850-2023 重来）——这是
   用户自己的决定，取决于下游分析是否具体用到这几年的结果。
@@ -232,3 +426,8 @@ case（比如这次涉及到的两个姊妹 case），如果以后要对它们�
 
 分支为本地 `master`，领先 `origin/master`（尚未 push，按仓库惯例不主动
 push 到远程）。
+
+`elm-olmt` 里 `cmake_macros/universal.cmake` 追加 `-DCPL_BYPASS` 这个机制、以
+及 `20260712_..._ad_spinup` 这个 case 自己的 `cmake_macros/universal.cmake`
+现在已经补回这一行，都不在这个 E3SM git 仓库的管辖范围内（`elm-olmt` 是独立
+仓库，case 目录不是 git 追踪的），本文档是目前唯一记录这件事的地方。
