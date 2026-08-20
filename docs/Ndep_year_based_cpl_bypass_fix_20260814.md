@@ -109,7 +109,7 @@ While processing ... openmpi/openmpi-4.1.7-test ...
   返回码 0，一次"load storm"都没有触发**——不是"容错扛过去"，是压根不
   发生。
 - 最终确认真正的触发条件：**在同一条 `module load` 命令里，如果 `gcc/12.4.0`
-  被处理两次**（一次是 `DefApps` 自己的级联加载，一次是紧接着又显式写一遍
+  被处理两次**（一次是 `DefApps` 自己的级联加载，一次是同一条命令里又显式写一遍
   `load gcc/12.4.0`），Lmod 的依赖解析就会在这次重复处理里触发"load storm"
   误判（>500 次重复加载，牵出一个不相关的 `openmpi/openmpi-4.1.7-test`
   模块）。走 shell 的 `module` 命令时，这个报错是非致命的（返回非 0，但
@@ -118,6 +118,14 @@ While processing ... openmpi/openmpi-4.1.7-test ...
   直接中止 `case.build`。**去掉这两行冗余的显式加载，让 `DefApps` 只被处理
   一次，两条路径都不会再触发这个问题**——第 3 节里用真正的 `case.build`
   重新验证过，问题已经解决，不再需要绕过。
+
+  **更正（2026-08-20）**：条件是「同一条命令里出现两次」，**两次请求相不
+  相邻无关**。上面那条失败的命令自己就是反例——
+  `load miniforge3/24.11.3-0 DefApps cmake/3.30.5 gcc/12.4.0 openmpi/5.0.5 ...`
+  里 `cmake/3.30.5` 就夹在 `DefApps` 和 `gcc/12.4.0` 中间，照样触发。本文
+  原先写的「紧接着」措辞会让人误以为必须紧邻；2026-08-20 复查时正是被这
+  个措辞带偏，一度判断 `mpilib="openmpi-amanzitpls"` 块安全而漏掉了它，
+  详见 §3 的补充。
 
   真正让我们最先注意到"或许不需要 module load"这条线索的，是用户之前一次
   在 `parallel` 分区跑成功的运行脚本（`20260619_..._ad_spinup` 的提交
@@ -182,6 +190,20 @@ CMake 报 `NETCDF not found`；补上这几个环境变量的显式 `export` 后
 ```
 
 （保留了一段注释解释原因，方便以后维护这个文件的人不会又加回去。）
+
+**补充（2026-08-20）**：当时只改了 `mpilib="openmpi"` 这一个块，漏掉了同
+一台机器的 `mpilib="openmpi-amanzitpls"` 块——它同样在 `DefApps` 之后又显
+式加载 `gcc/12.4.0` 和 `openmpi/5.0.5`。漏掉的原因是误以为中间隔着
+`cmake/3.30.5` 就不构成重复（见上面「排查过程」里的更正）。已在 commit
+`5d6dbfc5f1` 补上同样的删除。`MACH="cades-baseline"` 下的同名块属于另一台
+机器（CADES），故意没动。
+
+同一天（2026-08-14）上游 `E3SM-Project/E3SM` 也由 Fengming Yuan 提交了
+commit `7e4959b9a7`（"Fixes module loading infinite loop caused by
+gcc/12.4.0"，注释写的是 "here cause lmod infinite load, and DefApps is
+enough"），独立得出完全相同的结论，而且**两个 amanzitpls 块都改了**。该
+commit 不在我们 fork（`ORNL-Ecosystem-Projects/E3SM`）的任何分支上，所以
+这边是手改，不是 merge 或 cherry-pick。
 
 这次没有再跑 `case.setup --reset`（上次跑这个命令中途失败，删空了 case
 自己的配置文件，见下面"注意"），而是直接手动把同样两行从这个 case 自己
@@ -599,6 +621,11 @@ IB 网卡/固件在混代际协商下更容易出问题"这种介于两者之间
 
 分支为本地 `master`，领先 `origin/master`（尚未 push，按仓库惯例不主动
 push 到远程）。
+
+2026-08-20 追加两个 commit，同样未 push：
+
+- `5d6dbfc5f1`——把 `openmpi-amanzitpls` 块里同样的两行也删掉
+- `e3a5b6747d`——把 pfc* MPI_Init 排查用的两个诊断脚本纳入 Git
 
 `elm-olmt` 里 `cmake_macros/universal.cmake` 追加 `-DCPL_BYPASS` 这个机制、以
 及 `20260712_..._ad_spinup` 这个 case 自己的 `cmake_macros/universal.cmake`
