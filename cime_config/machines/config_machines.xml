@@ -4464,9 +4464,17 @@
 
       <modules compiler="gnu" mpilib="openmpi-amanzitpls">
         <command name="load">DefApps</command>
+        <!-- Same DefApps double-resolution problem as the mpilib="openmpi"
+             block above: DefApps already loads gcc/12.4.0 and openmpi/5.0.5
+             as its defaults, so requesting them again inside the same
+             combined `module load` invocation makes Lmod resolve gcc/12.4.0
+             twice and raise its "load storm" false positive, which is fatal
+             when driven through CIME's Python module interface. Position
+             within the block is irrelevant: the originally failing command
+             had cmake/3.30.5 sitting between DefApps and gcc/12.4.0.
+             Upstream E3SM-Project/E3SM commit 7e4959b9a7 made the same
+             change for the same reason. -->
         <command name="load">cmake/3.30.5</command>
-        <command name="load">gcc/12.4.0</command>
-        <command name="load">openmpi/5.0.5</command>
         <command name="load">openblas/0.3.28</command>
         <command name="use">-a /projects/hpcl-cli185/proj-shared/ccsi-apps/ats-dev/modulefiles</command>
         <command name="load">ats/tpls-0.98.13+master/pathfinder/openblas-0.3.28-openmpi-5.0.5-gcc-12.4.0/opt</command>
