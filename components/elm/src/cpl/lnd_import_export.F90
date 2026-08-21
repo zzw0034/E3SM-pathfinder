@@ -128,6 +128,7 @@ contains
     character(len=CL)  :: stream_fldFileName_popdens ! poplulation density stream filename
     character(len=CL)  :: stream_fldFileName_ndep    ! nitrogen deposition stream filename
     logical :: use_sitedata, has_zonefile, use_daymet, use_livneh, use_daymet_fut
+    logical :: use_daymet_halfdeg
     data caldaym / 1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366 /    
 
     ! Constants to compute vapor pressure
@@ -263,6 +264,7 @@ contains
           use_livneh = .false.
           use_daymet = .false.
           use_daymet_fut = .false.
+          use_daymet_halfdeg = .false.
           if(index(metdata_type, 'livneh') .gt. 0) then
               use_livneh = .true.
           else if (index(metdata_type, 'daymet-fut') .gt. 0) then
@@ -270,6 +272,17 @@ contains
               ! era5+daymet read path (grid, packing, zone_mappings.txt) but is a
               ! separate file series keyed to its own startyear_met (see below).
               use_daymet_fut = .true.
+              use_daymet = .true.
+          else if (index(metdata_type, 'daymet-halfdeg') .gt. 0) then
+              ! SEUS 0.5 deg forcing, aggregated from the 4 km TESSFA2 series.
+              ! Deliberately NOT a new metsource: it shares the era5+daymet
+              ! read path exactly -- same packing, same zone_mappings.txt
+              ! lookup, same clamps, zenith weighting, rain/snow split and
+              ! longwave substitution -- because the 0.5 deg product was
+              ! built to be read by those transforms unchanged. Only the file
+              ! name differs. use_daymet stays true so the 1980-2023 year
+              ! range set further below is inherited rather than restated.
+              use_daymet_halfdeg = .true.
               use_daymet = .true.
           else if (index(metdata_type, 'daymet') .gt. 0) then
               use_daymet = .true.
@@ -460,6 +473,8 @@ contains
             else if (atm2lnd_vars%metsource == 6) then
                 if (use_daymet_fut) then
                     metdata_fname = 'DBCCA_Daymet_TESSFA2_' // trim(metvars(v)) // '_2023-2100_z' // zst(2:3) // '.nc'
+                else if (use_daymet_halfdeg) then
+                    metdata_fname = 'Daymet_ERA5_TESSFA.0p5deg_' // trim(metvars(v)) // '_1980-2023_z' // zst(2:3) // '.nc'
                 else if (use_daymet) then
                     metdata_fname = 'Daymet_ERA5_TESSFA.4km_' // trim(metvars(v)) // '_1980-2023_z' // zst(2:3) // '.nc'
                 else
