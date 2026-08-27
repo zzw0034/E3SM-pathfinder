@@ -129,6 +129,7 @@ contains
     character(len=CL)  :: stream_fldFileName_ndep    ! nitrogen deposition stream filename
     logical :: use_sitedata, has_zonefile, use_daymet, use_livneh, use_daymet_fut
     logical :: use_daymet_halfdeg
+    logical :: use_daymet_fut_halfdeg
     data caldaym / 1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366 /    
 
     ! Constants to compute vapor pressure
@@ -265,8 +266,24 @@ contains
           use_daymet = .false.
           use_daymet_fut = .false.
           use_daymet_halfdeg = .false.
+          use_daymet_fut_halfdeg = .false.
           if(index(metdata_type, 'livneh') .gt. 0) then
               use_livneh = .true.
+          else if (index(metdata_type, 'daymet-fut-halfdeg') .gt. 0) then
+              ! SEUS 0.5 deg FUTURE forcing, aggregated from the 4 km
+              ! DBCCA_Daymet_TESSFA2 SSP series. Must dispatch BEFORE the
+              ! plain 'daymet-fut' test below, since this string contains
+              ! that one as a substring. Sets use_daymet_fut too so the
+              ! 2023-dummy-year / 2024-2100-real year range further below
+              ! (keyed off use_daymet_fut) is inherited unchanged -- the
+              ! 0.5 deg future product mirrors the 4 km future file's year
+              ! structure exactly (dummy year written as the sentinel
+              ! directly, real years aggregated), so no new year-range
+              ! logic is needed here, same reasoning as daymet-halfdeg
+              ! reusing daymet's 1980-2023 range below.
+              use_daymet_fut_halfdeg = .true.
+              use_daymet_fut = .true.
+              use_daymet = .true.
           else if (index(metdata_type, 'daymet-fut') .gt. 0) then
               ! CanESM5-DBCCA future (SSP) TESSFA2 forcing, 2024-2100. Shares the
               ! era5+daymet read path (grid, packing, zone_mappings.txt) but is a
@@ -471,7 +488,9 @@ contains
                     !metdata_fname = 'WCYCL1850S.ne30_' // trim(metvars(v)) // '_0076-0100_z' // zst(2:3) // '.nc'
                     metdata_fname = 'CBGC1850S.ne30_' // trim(metvars(v)) // '_0566-0590_z' // zst(2:3) // '.nc'
             else if (atm2lnd_vars%metsource == 6) then
-                if (use_daymet_fut) then
+                if (use_daymet_fut_halfdeg) then
+                    metdata_fname = 'DBCCA_Daymet_TESSFA2.0p5deg_' // trim(metvars(v)) // '_2023-2100_z' // zst(2:3) // '.nc'
+                else if (use_daymet_fut) then
                     metdata_fname = 'DBCCA_Daymet_TESSFA2_' // trim(metvars(v)) // '_2023-2100_z' // zst(2:3) // '.nc'
                 else if (use_daymet_halfdeg) then
                     metdata_fname = 'Daymet_ERA5_TESSFA.0p5deg_' // trim(metvars(v)) // '_1980-2023_z' // zst(2:3) // '.nc'
