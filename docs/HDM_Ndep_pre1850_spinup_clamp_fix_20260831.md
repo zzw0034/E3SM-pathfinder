@@ -214,3 +214,14 @@ Ndep 解析出来的是 `using records 2 and 3`，根本没有实际读取 recor
 密度在这两年之间几乎不变），科学上可以忽略，不值得为了这一年之差重跑
 ~640 个已完成的 spinup 年份。这个差异已经记录进 SEUS_halfdeg 的
 `docs/PLAN.md` 和 `docs/DESIGN_DECISIONS.md` §2。
+
+**源码改动已撤销，2026-09-01**：既然真正的修复是换数据源，不是改代码，用户
+决定 `20260901_seus_halfdeg_transient` 尽量少动 ELM 源码——把
+`SourceMods/src.elm/lnd_import_export.F90` 里两行都改回原始的
+`nindex(1:2) = 1`，然后用 `diff` 确认整个文件跟未改动的 E3SM 源码
+**逐字节完全一致**，于是直接把这个 SourceMods 覆盖文件删掉了（而不是留一份
+内容等于没改的空文件）。这个 case 现在对 HDM/Ndep 读取代码**零改动**，修复
+完全落在数据源那一侧（上面提到的 0.5°×0.5° 标准文件）。`0003`/`0004` 这两
+个 patch 只保留在 `20260831_seus_halfdeg_ad_spinup`/
+`20260901_seus_halfdeg_final_spinup` 各自的 `SourceMods` 里，作为这两个已
+完成 case 真实构建记录的一部分，不做撤销。
