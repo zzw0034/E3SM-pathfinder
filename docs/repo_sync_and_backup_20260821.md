@@ -1,13 +1,15 @@
-# 仓库同步与备份现状（2026-08-21）
+# 仓库同步与备份现状（2026-08-21，台账更新至 2026-09-02）
 
-记录这个 E3SM checkout 与 GitHub 的实际关系，以及为什么目前的异地备份靠一个
+记录这个 E3SM checkout 与 GitHub 的实际关系，以及为什么目前的异地备份靠
 git bundle 而不是 push。这两件事都不是从代码或 git 历史里能看出来的，所以写在
 这里。
 
 ## 两条要点
 
 1. **我们对 `ORNL-Ecosystem-Projects/E3SM` 没有写权限。**读通、写被拒。
-2. **因此这 19 个 commit 的异地备份目前靠一个 git bundle**，不是 GitHub。
+2. **因此这些本地 commit 的异地备份靠定期重打的 git bundle**，不是 GitHub。
+   当前为 27 个 commit（2026-09-02），bundle 台账见 §2.1——**每次新增 commit
+   后都要重打一份并在台账补一行**。
 
 ---
 
@@ -39,24 +41,43 @@ fatal: Could not read from remote repository.
 E3SM 全部历史，所以很小。
 
 ```bash
-# Pathfinder 上生成
+# Pathfinder 上生成（把日期换成当天）
 cd /projects/hpcl-cli185/proj-shared/zw5/E3SM
-git bundle create /tmp/zw5_e3sm_20260821.bundle origin/master..HEAD
-git bundle verify /tmp/zw5_e3sm_20260821.bundle
+git bundle create /tmp/zw5_e3sm_YYYYMMDD.bundle origin/master..HEAD
+git bundle verify /tmp/zw5_e3sm_YYYYMMDD.bundle
 ```
 
-```text
-bundle 包含: 9dfc3c27dcd08c7b77a4e16fe83ab256eac8bdb7 (HEAD)
-bundle 需要: c181c41b1ab96aa5488f65eee302bc3cd6bf26c2
-大小: 55K
+```bash
+# remote -> local 拉回 Mac，并核对两端 md5
+scp pathfinder:/tmp/zw5_e3sm_YYYYMMDD.bundle \
+    /Users/zw5/ORNL_workplace/pathfinder/E3SM_docs/bundles/
 ```
 
-`remote -> local` 拉回 Mac，存放于：
+### 2.1 台账：已生成的 bundle
 
-```text
-/Users/zw5/ORNL_workplace/pathfinder/E3SM_docs/bundles/zw5_e3sm_20260821.bundle
-md5 = b7f32bfd91bfd4eee91604ad847035ef（两端一致）
-```
+**这不是一次性的事，做过很多次了。**下面按时间列全，方便判断当前那份覆盖到
+哪里、需不需要重打。全部存放在
+`/Users/zw5/ORNL_workplace/pathfinder/E3SM_docs/bundles/`，md5 均已在生成当天
+核对过两端一致。
+
+| bundle 文件 | 覆盖到 | commit 数 | 大小 | md5 |
+|---|---|---|---|---|
+| `zw5_e3sm_20260821.bundle` | `9dfc3c27dc`（08-20） | 19 | 55K | `b7f32bfd91bfd4eee91604ad847035ef` |
+| `zw5_e3sm_20260821b.bundle` | `9b81ee919e` + `a43be28054`（08-21） | 21 | 62K | `aa6cf4aab6b2afb4b12492d13629d342` |
+| `zw5_e3sm_20260827.bundle` | `9b81ee919e` + `ac893e1fc4`（08-27） | 22 | 63K | `4fcc3121c94a17426768b113cef1e45a` |
+| `zw5_e3sm_20260831.bundle` | `94da735f76`（08-31） | 23 | 67K | `e1f935e3cb2473c0a57688769df957e3` |
+| **`zw5_e3sm_20260902.bundle`** | **`3970b9c0af`（09-01）** | **27** | **80K** | `08384a6c9fb04b3f9e0ea18be51b04bf` |
+
+commit 数是 `git rev-list --count c181c41b1a..<tip>` 的结果。
+
+两点会绊人的细节：
+
+- **`20260821b` 和 `20260827` 各含两个 head**，因为当时同时存在两条分支；其余
+  几份只有一个 `HEAD`。恢复时用 `git bundle list-heads <file>` 先看清有几个 ref。
+- **分支名换过。** 早期的 tip 在本地 `master` 上；2026-09-02 时 Pathfinder 上的
+  检出已经在 `zw5/seus-halfdeg-metdata-type` 分支。bundle 里的 ref 名是 `HEAD`
+  而不是分支名，所以恢复命令不受影响，但别按分支名去找。
+- **依赖的基点始终是 `c181c41b1ab96aa5488f65eee302bc3cd6bf26c2`**，五份都一样。
 
 ### 怎么恢复
 
@@ -65,15 +86,19 @@ bundle 依赖的 `c181c41b1a` 在**公开的** `E3SM-Project/E3SM` 历史里，�
 
 ```bash
 git clone https://github.com/E3SM-Project/E3SM.git && cd E3SM
-git fetch /path/to/zw5_e3sm_20260821.bundle HEAD:recovered
+git fetch /path/to/zw5_e3sm_20260902.bundle HEAD:recovered
 ```
 
-19 个 commit 会落到本地分支 `recovered` 上。
+那 27 个 commit 会落到本地分支 `recovered` 上。
 
 ### 局限
 
-**这是快照，不是持续同步。**每次有新 commit 都要重新打一次 bundle。真正的解法
-仍然是拿到写权限往 GitHub 推。截至 2026-08-21，bundle 覆盖到 `9dfc3c27dc`。
+**这是快照，不是持续同步。**每次有新 commit 都要重新打一次 bundle，并在上面的
+台账里补一行——只记"做过一个 bundle"而不记后续几次，会让人误以为备份停在了
+第一次（2026-09-02 就因此误判过一次，说"只有 8/21 那份、之后没覆盖"，实际
+8/27、8/31 都打过）。真正的解法仍然是拿到写权限往 GitHub 推。
+
+截至 2026-09-02，最新一份是 `zw5_e3sm_20260902.bundle`，覆盖到 `3970b9c0af`。
 
 ---
 
