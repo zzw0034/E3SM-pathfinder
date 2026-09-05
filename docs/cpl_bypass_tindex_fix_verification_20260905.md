@@ -185,4 +185,101 @@ srun --jobid=<id> --overlap -N<n> -n<n> --ntasks-per-node=1 bash -c '...读 /pro
 仅仅启动了自动保存程序不等于基准已保住。基准清单必须包含 **A 的 2023 年
 history 输出和运行日志**，因为 B 会重新生成同名文件并覆盖它们。
 
-结果待补。
+### 结果
+
+**测试 2a：连续 vs 中途重启一致性 —— 通过**
+
+```
+运行A  511752  COMPLETED 0:0  54:55   1995->2024 连续，逐年写 restart
+运行B  511762  COMPLETED 0:0  02:48   从 A 的 2023-01-01 checkpoint 恢复，跑 1 年
+       同一 exe（md5 9dfcf9dfd3ef4c42fae0f32d520ade4f）、571 任务、同一套输入
+```
+
+基准保存前做了**来源校验**（文件计数与 md5 只能证明复制完整，不能证明来源）：
+2023 h0/h1 的 mtime 为 00:56:10/11，落在运行 A 的时间窗
+`[00:01:20, 00:56:15]` 内，排除了误存前一次运行（511687，前晚 19:48 结束）
+遗留文件的可能。随后 10 个 `.nc` 逐一 md5 与源一致。
+
+逐变量数值比较（`cmp_nc.py`，遍历每个数值变量报 `max|A-B|`、最大相对差、
+差异元素数；两边同为 NaN 视为相等）：
+
+| 对象 | 结果 |
+|---|---|
+| **2024 restart（future 的初始场）** | **461 个数值变量逐比特一致** |
+| 2023 全年 h1 | 115 个变量逐比特一致 |
+| 2023 全年 h0 | 560/561 一致，唯一差异 `SEEDC_GRC` |
+
+#### 唯一差异 `SEEDC_GRC` 的解释（与本次修复无关）
+
+```
+运行A 各年最小值  1995 -0.0173 -> 2000 -0.0714 -> 2010 -0.239
+                 -> 2020 -0.356 -> 2022 -0.360
+运行B（2023）     恒为 0
+
+restart 中的 seed 变量：seedc/seedn/seedp，维度全为 ('column',)
+restart 中含 grc/gridcell 的变量：无
+```
+
+`SEEDC_GRC`（`pool for seeding new PFTs via dynamic landcover`，gC/m^2）
+背后的**格点级**累加量根本不在 restart 里——restart 只存 column 级的
+`seedc`，一个格点级变量都没有。重启时它从零重新开始，运行 B 显示的正是
+这个；运行 A 那个值是自 1995 年起 28 年的缓慢累积残余。
+
+**这是 ELM 既有的 restart 完备性缺口，与缺陷 A/B 的修复无关**（两个修复只
+动气象驱动的时间索引）。不影响结论的三条依据：
+
+1. 底层状态 `seedc` 三份 restart 全为零且完全一致，最大差 0
+2. 2024 restart 逐比特一致，说明它不回馈进保存状态
+3. 量级 0.36 gC/m^2，约为典型碳库（10^3-10^4 gC/m^2）的 0.004%；
+   且对一个 "pool" 取负值，本身说明它是动态地表覆盖的记账残差而非物理存量
+
+**对 future 的直接含义**：既然它不在 restart 里，就不可能进入 future 的
+初始条件。
+
+另有 8 个变量只出现在运行 B 的 h0 中：`BSW`、`DZLAKE`、`DZSOI`、`HKSAT`、
+`SUCSAT`、`WATSAT`、`ZLAKE`、`ZSOI`——全是时不变的土壤/湖泊参数，ELM 只写进
+一次运行的**首个** history 文件。运行 A 写进了 1995 那个，运行 B 的首个就是
+2023。同样不是物理差异。
+
+**测试 2b：future 衔接检查 —— 通过**
+
+case `20260905_dbg_halfdeg_futhandoff`（克隆自
+`20260901_seus_halfdeg_future_ssp245`，未用 `--keepexe`），
+`finidat` 指向运行 B 生成的 2024 存档。
+
+```
+511773  COMPLETED 0:0  31 秒   2 天 97 步（半小时步长）
+511775  COMPLETED 0:0  22 秒   加诊断重跑 1 天，实测索引
+
+越界 / runtime / SIGSEGV / ENDRUN / 平衡错误   全部 0（bounds checking 开启）
+initial data = .../20260904_dbg_halfdeg_2023end...elm.r.2024-01-01-00000.nc
+metdata_type = 'era5-daymet-fut-halfdeg'   （future 驱动，非历史驱动）
+HDM 175/176   Ndep 176/177                （2024 的正确索引）
+```
+
+衔接是通过 **`finidat`**（`RUN_TYPE=startup`，`CONTINUE_RUN=FALSE`）完成的，
+不是 `CONTINUE_RUN` + rpointer。因此不涉及"重启借用"的四个坑。
+
+实测气象索引（补验，不接受推导）：
+
+```
+TINDEX_INIT yr=2024 mon=1 day=1  t1=2920  t2=2921
+                                 timelen=227760  timelen_spinup=2920
+递增 (2920,2921) -> (2921,2922) -> ... -> (2928,2929)，偏移恒为 1
+一天 8 次推进（24h / 3h），47 条记录 = 48 个半小时步减去初始化那次
+```
+
+与推导一致：`use_daymet_fut` 下 `startyear_met=2023`，`yr=2024 > 2023` 走
+线性分支得 `(2024-2023)*2920 = 2920`；`timelen=227760` = 78 年 × 2920
+（2023 dummy + 2024-2100）。
+
+`era5-daymet-fut-halfdeg` 会**同时**设 `use_daymet_fut`（源码第 272-286 行，
+有注释说明是为继承 2023-dummy / 2024-2100 的年份范围，且必须排在
+`daymet-fut` 之前判断，因为字符串包含它），所以 future 配置不受缺陷 A 影响。
+
+### 验收结论
+
+测试 1、2a、2b 全部通过。A3（从 2020 重跑历史尾段）的前置条件满足。
+
+仍未解除的三条已知限制见 `fc2a4f2be1` 提交说明：历史配置从 2024 初始化
+未受保护、跨终点后索引配对被压平、初始化路径不经过守卫。
