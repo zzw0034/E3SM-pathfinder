@@ -68,7 +68,8 @@ scp pathfinder:/tmp/zw5_e3sm_YYYYMMDD.bundle \
 | `zw5_e3sm_20260831.bundle` | `94da735f76`（08-31） | 23 | 67K | `e1f935e3cb2473c0a57688769df957e3` |
 | `zw5_e3sm_20260902.bundle` | `3970b9c0af`（09-01） | 27 | 80K | `08384a6c9fb04b3f9e0ea18be51b04bf` |
 | `zw5_e3sm_20260902b.bundle` | `6a3d7b0e2b`（09-02） | 28 | 80K | `683a8aeae29378401698b191b39025a3` |
-| **`zw5_e3sm_20260904.bundle`** | **`02a675307b`（09-04）** | **31** | **89K** | `a3152349d83c5a7858f7284cdcbc7807` |
+| `zw5_e3sm_20260904.bundle` | `02a675307b`（09-04） | 31 | 89K | `a3152349d83c5a7858f7284cdcbc7807` |
+| **`zw5_e3sm_20260905.bundle`** | **`fc2a4f2be1`（09-05）** | **33** | **92K** | `1a9007ebb10200bedc3ecea766aac07d` |
 
 commit 数是 `git rev-list --count c181c41b1a..<tip>` 的结果。
 
@@ -100,7 +101,7 @@ git fetch /path/to/zw5_e3sm_20260902.bundle HEAD:recovered
 第一次（2026-09-02 就因此误判过一次，说"只有 8/21 那份、之后没覆盖"，实际
 8/27、8/31 都打过）。真正的解法仍然是拿到写权限往 GitHub 推。
 
-截至 2026-09-04，最新一份是 `zw5_e3sm_20260904.bundle`，覆盖到 `02a675307b`，
+截至 2026-09-05，最新一份是 `zw5_e3sm_20260905.bundle`，覆盖到 `fc2a4f2be1`（含缺陷 A 与 B 两个修复），
 含 cpl_bypass 重启时间索引越界修复（`3cf28db19f`）及其说明文档（`becb698cd7`），
 详见 [`cpl_bypass_restart_tindex_overrun_20260904.md`](cpl_bypass_restart_tindex_overrun_20260904.md)。
 
