@@ -641,6 +641,24 @@ contains
               if (atm2lnd_vars%tindex(g,v,2) .gt. atm2lnd_vars%timelen(v)) then
                  atm2lnd_vars%tindex(g,v,2) = atm2lnd_vars%timelen(v)-atm2lnd_vars%timelen_spinup(v)+1
               end if
+            else
+              ! startyear_met < yr <= endyear_met_trans: the aligned transient
+              ! window, where tindex walks the real met years one-to-one.
+              ! Neither branch above guards it, so at the very last record of
+              ! the last met year tindex(2) = tindex(1)+1 runs one element past
+              ! atm_input. That read is silent in a release build because
+              ! atm_input is integer*2: the out-of-bounds short maps through
+              ! scale/offset into a plausible value, so the model gets wrong
+              ! weather with no error.
+              ! Hold the last record instead of wrapping to 1. There is no next
+              ! cycle to wrap to here, and wrapping would splice startyear_met's
+              ! weather onto the end of the record. Holding makes the final
+              ! interval degenerate to the last real record, which is the
+              ! end-of-data boundary state.
+              if (atm2lnd_vars%tindex(g,v,1) .gt. atm2lnd_vars%timelen(v)) &
+                   atm2lnd_vars%tindex(g,v,1) = atm2lnd_vars%timelen(v)
+              if (atm2lnd_vars%tindex(g,v,2) .gt. atm2lnd_vars%timelen(v)) &
+                   atm2lnd_vars%tindex(g,v,2) = atm2lnd_vars%timelen(v)
             end if
 
             !if (yr .gt. atm2lnd_vars%startyear_met) then 
