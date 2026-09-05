@@ -211,10 +211,11 @@ history 输出和运行日志**，因为 B 会重新生成同名文件并覆盖�
 严格重比以**归档作业**执行，可追溯复现：
 
 ```
-作业        511791   COMPLETED 0:0   4 秒
+作业        511793   COMPLETED 0:0   2 秒（511791 无属性比较、对照未门控；
+            511792 加入属性比较后正确地 FAIL，暴露出未记录的全局属性差异）
 脚本        cmp_runAB_strict.sbatch （取代旧的 cmp_runAB.sbatch，后者调用
             旧 cmp_nc.py 且不传播退出码）
-归档输出    <case>/cmp_runAB_strict.511791.out
+归档输出    <case>/cmp_runAB_strict.511793.out
 环境        python 3.9.25  netCDF4 1.7.2  numpy 2.0.2
 ```
 
@@ -244,21 +245,40 @@ rh0     68011133… != 74af090c…     文件字节不同
 rh1     33dbfd57… != de5fe66f…     文件字节不同
 ```
 
-但这三个文件的**每一个变量都逐比特一致**。差异在 NetCDF 头部元数据里
-（创建时戳、内部布局/填充）。**用 sha256 判等会得出"不同"的错误结论**，
-必须逐变量比对。
-
-### 工具本身的有效性对照
-
-同一份归档输出里带两个对照，防止"恒返回通过"：
+但这三个文件的**每一个变量的数据和变量属性都逐比特一致**。加入属性比较后
+（作业 511793）差异定位到**全局属性**：
 
 ```
-对照1  同一文件自比            -> PASS（exit 0）
-对照2  2023 vs 2024 restart 自比 -> FAIL（exit 1，242 项未解释）
-       例：xsmrpool max|A-B|=195.654  tsai_z 7.35059  wf 0.423866
+__global__:history   'created on 09/05/26 00:56:11' vs 'created on 09/05/26 01:00:52'
 ```
 
-对照 2 证明工具确实能检出真实差异。
+是 ELM 写文件时记的创建墙钟时间。**互证**：`cpl.r` 没有这条差异（全局属性
+完全一致），而它正是四个文件里 sha256 唯一相同的那个。
+
+**用 sha256 判等会得出"不同"的错误结论**，必须逐变量+属性比对。
+
+### 工具本身的有效性对照（**参与判定，非仅打印**）
+
+```
+对照1  同一文件自比              -> PASS（exit 0）；若非零则 overall=1
+对照2  2023 vs 2024 restart 自比 -> FAIL（exit 1，243 项未解释）；若为零则 overall=1
+```
+
+两个对照都写进了 `overall` 判定。若工具将来意外退化成"恒通过"，对照 2 会
+返回零，脚本随即报 FAIL——而不是照样给出 `OVERALL: PASS`。
+
+### 豁免按属性名，不做一刀切
+
+全局属性差异逐条记录为 `__global__:<属性名>`，只能按名豁免：
+
+```
+restart   --expect __global__:history
+h1        + --expect __global__:Time_constant_3Dvars_filename
+h0        + --expect __global__:Time_constant_3Dvars
+```
+
+`--expect __global__` 式的整体放行会把将来任何全局属性变化一起藏掉，
+所以不用。
 
 `time_written` 是每条 history 记录**写盘时的墙钟时间**（A: 00:54:26/33/44，
 B: 00:59:12/19/26，对应两次运行的写盘时刻；同文件的 `date_written` 两边同为
@@ -302,9 +322,22 @@ restart 中含 grc/gridcell 的变量：无
 通过 restart 进入 future 的初始条件。
 
 另有 8 个变量只出现在运行 B 的 h0 中：`BSW`、`DZLAKE`、`DZSOI`、`HKSAT`、
-`SUCSAT`、`WATSAT`、`ZLAKE`、`ZSOI`——全是时不变的土壤/湖泊参数，ELM 只写进
-一次运行的**首个** history 文件。运行 A 写进了 1995 那个，运行 B 的首个就是
-2023。同样不是物理差异。
+`SUCSAT`、`WATSAT`、`ZLAKE`、`ZSOI`。加入属性比较后，**ELM 自己的全局属性
+给出了直接证据**，不再需要推断：
+
+```
+h0  __global__:Time_constant_3Dvars
+      only in A: 'ZSOI:DZSOI:WATSAT:SUCSAT:BSW:HKSAT:ZLAKE:DZLAKE'
+    __global__:Time_constant_3Dvars_filename
+      only in A: './...elm.h0.1995-02-01-00000.nc'
+
+h1  __global__:Time_constant_3Dvars_filename
+      './...elm.h0.1995-02' (A)  vs  './...elm.h0.2023-02' (B)
+```
+
+属性里逐字列出的正是那 8 个变量，并指明它们写进了 **1995-02** 那个 h0——
+运行 A 的首个 history 文件；运行 B 的首个就是 2023-02，所以直接写在那里。
+是"哪次运行先写了首个 history"的产物，不是物理差异。
 
 **测试 2b：future 衔接检查 —— 通过**
 
