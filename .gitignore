@@ -63,3 +63,23 @@ components/eamxx/src/python/dist
 components/emulators/build
 **/Testing/**
 **/.cache/**
+
+# ---- Pathfinder 工作副本的本地产物（zw5，2026-09-10）----
+# Slurm 作业输出。jobs/ 下的 *.slurm 脚本本身是跟踪的，输出不跟踪。
+jobs/*.out
+jobs/*.err
+
+# mksurfdata_map 在源码树里就地编译和运行的产物
+components/elm/tools/mksurfdata_map/mksurfdata_map
+components/elm/tools/mksurfdata_map/src/Depends
+components/elm/tools/mksurfdata_map/clm.input_data_files
+components/elm/tools/mksurfdata_map/*.out
+components/elm/tools/mksurfdata_map/*.err
+
+# 手工备份副本，例如 lnd_import_export.F90.bak.20260520、namelist.bak_c0723
+*.bak
+*.bak.*
+*.bak_*
+
+# Fortran 运行时按单元号写出的残留文件，例如 fort.99
+fort.*
