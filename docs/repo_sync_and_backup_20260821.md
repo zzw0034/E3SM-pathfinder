@@ -1,5 +1,14 @@
 # 仓库同步与备份现状（2026-08-21，台账更新至 2026-09-02）
 
+> **状态：已退役，保留作历史记录（2026-09-10）。**
+> 2026-09-10 起本仓库可以推送到私有仓库 `zzw0034/E3SM-pathfinder`（remote 名
+> `mygh`），git bundle 备份方案随之退役，不再需要每次提交后重打 bundle。
+> 当前的仓库、分支、修改历史与同步办法见
+> [`git_and_github_guide.md`](git_and_github_guide.md)。
+>
+> 本文仍然有效的部分：§1 的权限结论（对 `origin` 没有写权限）、§3（三个仓库
+> 别搞混）、§4（为什么不合并 `origin/master`）。§2 的 bundle 台账只作历史查阅。
+
 记录这个 E3SM checkout 与 GitHub 的实际关系，以及为什么目前的异地备份靠
 git bundle 而不是 push。这两件事都不是从代码或 git 历史里能看出来的，所以写在
 这里。
@@ -7,7 +16,9 @@ git bundle 而不是 push。这两件事都不是从代码或 git 历史里能�
 ## 两条要点
 
 1. **我们对 `ORNL-Ecosystem-Projects/E3SM` 没有写权限。**读通、写被拒。
-2. **因此这些本地 commit 的异地备份靠定期重打的 git bundle**，不是 GitHub。
+2. ~~**因此这些本地 commit 的异地备份靠定期重打的 git bundle**，不是 GitHub。~~
+   **（2026-09-10 起改为直接 push 到 `mygh`，本条作废，见文首状态说明。）**
+   原文：
    当前为 27 个 commit（2026-09-02），bundle 台账见 §2.1——**每次新增 commit
    后都要重打一份并在台账补一行**。
 
@@ -116,6 +127,17 @@ git fetch /path/to/zw5_e3sm_20260902.bundle HEAD:recovered
 
 ---
 
+### 2.2 退役（2026-09-10）
+
+bundle 方案的初衷是"没有 push 目标时的兜底"。2026-09-10 新建了私有仓库
+`zzw0034/E3SM-pathfinder` 并把全部历史推了上去，这个前提消失了，所以：
+
+- **不再需要每次提交后重打 bundle、补台账行。**
+- 上表 8 份 bundle 保留在
+  `/Users/zw5/ORNL_workplace/pathfinder/E3SM_docs/bundles/`，作为 2026-08-21
+  到 09-05 那段时间的历史快照，不删除，也不再新增。
+- 覆盖到 `fc2a4f2be1`（09-05）之后的提交，异地副本在 GitHub 上，不在 bundle 里。
+
 ## 3. 背景：三个仓库，别搞混
 
 排查 Lmod 问题时在这上面绕了很久，记下来免得重复。
@@ -125,7 +147,8 @@ git fetch /path/to/zw5_e3sm_20260902.bundle HEAD:recovered
 | `E3SM-Project/E3SM` : `fmyuan/ornl-pathfinder-machine-settings` | **真正的上游**。Pathfinder 机器修复全在这条分支上。我们没有 remote 指向它 |
 | `ORNL-Ecosystem-Projects/E3SM` : `master` | 我们的 `origin`。尖端停在 2026-06-25 |
 | `ORNL-Ecosystem-Projects/E3SM` : `fmyuan/`**`machines/`**`ornl-pathfinder-machine-settings` | 名字只差一个 `machines/`，在另一个仓库里，**不是**我们的来源 |
-| Pathfinder 本地 `master` | `c181c41b1a` + 5 个 cherry-pick + 14 个自己的 commit |
+| `zzw0034/E3SM-pathfinder` : `master` | 2026-09-10 新建的私有仓库，remote 名 `mygh`，我们唯一能写的地方 |
+| Pathfinder 本地 `master` | `c181c41b1a` + 5 个 cherry-pick + 36 个自己的 commit（2026-09-10） |
 
 三者的共同祖先都是 `c181c41b1a`（2026-03-19），**是兄弟关系，不是父子**。
 
