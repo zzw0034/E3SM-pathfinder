@@ -35,9 +35,9 @@ Pathfinder 上 `/projects/hpcl-cli185/proj-shared/zw5/E3SM` 这份 checkout 是�
 c181c41b1a  上游 E3SM-Project/E3SM 的 master 尖端（2026-03-19），共同基点
    │
    ├─ +5 个 cherry-pick   fmyuan 的 Pathfinder 机器设置提交
-   ├─ +36 个自己的提交
+   ├─ +38 个自己的提交
    │
-9f55b2b4bf  当前尖端（2026-09-10），master 与 zw5/seus-halfdeg-metdata-type 同址
+2d7b31f799  尖端（2026-09-10）
 ```
 
 本地这份是 2026-05-18 按 Nick 邮件的 recipe 建的：clone ORNL fork，再用
@@ -46,21 +46,19 @@ cherry-pick。这种临时 fetch 只写 `FETCH_HEAD`、不建 remote-tracking re
 `git branch -r --contains <sha>` 查不到它们，看着像本地独有，其实不是。
 
 **我们的 `master` 和 `origin/master` 是兄弟不是父子。** 两者共同祖先是
-`c181c41b1a`，从那以后 ORNL 走了 1131 个提交，我们走了 41 个，互不包含。
-`ahead 41, behind 1131` 描述的是分叉，不是"落后了要追"。为什么不合并
+`c181c41b1a`，从那以后 ORNL 走了 1131 个提交，我们走了 43 个，互不包含。
+`ahead 43, behind 1131` 描述的是分叉，不是"落后了要追"。为什么不合并
 `origin/master`，见 `repo_sync_and_backup_20260821.md` §4，结论是收益为零且会
 打断生产链。
 
 ## 4. 分支
 
-| 分支 | 状态 |
-| --- | --- |
-| `master` | 长期分支，当前尖端 `9f55b2b4bf` |
-| `zw5/seus-halfdeg-metdata-type` | 2026-09-10 已快进合并进 `master`，两者同址 |
+**`master` 是唯一的分支。**
 
-那条 topic 分支原本是给 0.5 度气象数据用的，后来装进了 tindex 越界修复这类和
-它无关的通用改动，边界已经没有意义。**约定：以后直接提交到 `master`**，只有做
-实验性、可能要丢弃的改动时才另开分支。
+曾经有一条 `zw5/seus-halfdeg-metdata-type`，2026-09-10 快进合并进 `master` 之后
+本地和远端都删掉了，提交一个没丢。它原本是给 0.5 度气象数据用的，后来装进了
+tindex 越界修复这类无关的通用改动，边界已经没有意义。**约定：以后直接提交到
+`master`**，只有做实验性、可能要丢弃的改动时才另开分支。
 
 合并用的是 `git branch -f master <分支>` 而不是 `checkout` + `merge`。因为是快
 进，移动指针就够了，工作树一个字节都不动，源码时间戳不变，不会触发多余的
@@ -68,7 +66,9 @@ cherry-pick。这种临时 fetch 只写 `FETCH_HEAD`、不建 remote-tracking re
 
 ## 5. 我改了什么
 
-41 个提交合计 29 个文件，`+3428 / -75`。按用途分四类：
+截至 `2d7b31f799`（2026-09-10），43 个提交合计 31 个文件，`+3626 / -75`。
+数字锚定到具体提交，因为记录数字的那次提交本身又会让数字过期，不锚定就得反复
+追改。用 `git diff --stat origin/master...HEAD` 取当前值。按用途分四类：
 
 **机器接入（`cime_config/machines/`）**
 
@@ -97,7 +97,9 @@ cherry-pick。这种临时 fetch 只写 `FETCH_HEAD`、不建 remote-tracking re
 
 **Slurm 脚本与文档**
 
-`jobs/` 下 11 个构建与诊断脚本，`docs/` 下 9 份技术文档。每个修复都有对应的
+`jobs/` 下 11 个构建与诊断脚本，`docs/` 下 10 份技术文档，外加一份 `.gitignore`
+（忽略 Slurm 作业输出、mksurfdata_map 的就地编译产物、`.bak` 副本和 `fort.*`）。
+每个修复都有对应的
 文档，文件名带日期，是排查过程和验证证据的一手记录。
 
 ## 6. 日常用法
